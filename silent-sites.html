@@ -1,0 +1,966 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Silent Sites — restriction placement finder</title>
+<style>
+  /* ---- Design tokens ---------------------------------------------------
+     Subject: a bench bioinformatics instrument. The vernacular is the gel
+     doc and the sequencer readout: fixed-pitch data, a dark instrument
+     chassis, and a single phosphor-green signal colour for "a site lives
+     here". Everything that is data is monospaced; everything that is a
+     control is the humanist sans. No decoration that isn't a readout. */
+  :root {
+    --chassis:      #14181c;   /* instrument body */
+    --panel:        #1c2229;   /* raised panel */
+    --panel-edge:   #2b343d;   /* hairline between panels */
+    --ink:          #e6ebef;   /* primary text on dark */
+    --ink-dim:      #8b97a3;   /* secondary text */
+    --ink-faint:    #5a6570;   /* tertiary / disabled */
+    --signal:       #4fe3a1;   /* phosphor green — a placement exists */
+    --signal-dim:   #2a7d5c;   /* muted signal */
+    --warn-amber:   #e8b04b;   /* codon cost / caution */
+    --alert:        #e8664b;   /* collision / impossible */
+    --paper:        #f4f2ec;   /* light readout card */
+    --paper-ink:    #23282d;
+    --mono: 'SF Mono','SFMono-Regular','Consolas','Liberation Mono',Menlo,monospace;
+    --sans: 'Inter','Helvetica Neue',Arial,system-ui,sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--chassis);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 14px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 22px 80px; }
+
+  /* ---- Masthead ---- */
+  header.mast {
+    display: flex; align-items: baseline; gap: 16px;
+    border-bottom: 1px solid var(--panel-edge);
+    padding-bottom: 16px; margin-bottom: 24px; flex-wrap: wrap;
+  }
+  .mast h1 {
+    font-size: 15px; font-weight: 600; letter-spacing: 0.02em;
+    margin: 0; color: var(--ink);
+  }
+  .mast .glyph {
+    font-family: var(--mono); color: var(--signal);
+    font-size: 15px; letter-spacing: -0.05em;
+  }
+  .mast .sub {
+    font-family: var(--mono); font-size: 11px; color: var(--ink-faint);
+    margin-left: auto; letter-spacing: 0.03em;
+  }
+
+  /* ---- Layout ---- */
+  .grid { display: grid; grid-template-columns: 340px 1fr; gap: 22px; align-items: start; }
+  @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-edge);
+    border-radius: 6px;
+    padding: 18px;
+  }
+  .panel + .panel { margin-top: 16px; }
+
+  .panel h2 {
+    font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.09em; color: var(--ink-dim); margin: 0 0 14px;
+  }
+
+  label.field { display: block; margin-bottom: 14px; }
+  label.field .lab {
+    display: block; font-size: 11px; color: var(--ink-dim);
+    margin-bottom: 5px; letter-spacing: 0.02em;
+  }
+  textarea, select, input[type=number] {
+    width: 100%; background: var(--chassis); color: var(--ink);
+    border: 1px solid var(--panel-edge); border-radius: 4px;
+    font-family: var(--mono); font-size: 12px; padding: 9px 10px;
+    resize: vertical;
+  }
+  textarea { min-height: 108px; line-height: 1.5; letter-spacing: 0.02em; }
+  textarea::placeholder { color: var(--ink-faint); }
+  select:focus, textarea:focus, input:focus {
+    outline: 2px solid var(--signal-dim); outline-offset: -1px; border-color: var(--signal-dim);
+  }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+
+  button.run {
+    width: 100%; background: var(--signal); color: #06110b;
+    border: none; border-radius: 4px; font-family: var(--sans);
+    font-weight: 600; font-size: 13px; letter-spacing: 0.02em;
+    padding: 11px; cursor: pointer; margin-top: 2px;
+  }
+  button.run:hover { background: #6bf0b4; }
+  button.run:active { transform: translateY(1px); }
+
+  .hint { font-size: 11px; color: var(--ink-faint); line-height: 1.5; margin-top: 8px; }
+
+  /* enzyme checklist */
+  .enz-list { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; margin-top: 4px; }
+  .enz-item { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--ink-dim); cursor: pointer; }
+  .enz-item input { accent-color: var(--signal); }
+  .enz-item .site { color: var(--ink-faint); font-size: 10px; }
+  .tier-head { font-family: var(--sans); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-faint); margin: 10px 0 4px; grid-column: 1/-1; }
+  .enz-toolbar { display: flex; gap: 12px; margin-bottom: 8px; }
+  .enz-toolbar a { font-size: 11px; color: var(--signal); cursor: pointer; text-decoration: none; }
+  .enz-toolbar a:hover { text-decoration: underline; }
+
+  /* ---- Results ---- */
+  .placeholder-panel {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    min-height: 380px; text-align: center; color: var(--ink-faint);
+    border: 1px dashed var(--panel-edge); border-radius: 6px; padding: 40px;
+  }
+  .placeholder-panel .big { font-family: var(--mono); font-size: 13px; color: var(--ink-dim); margin-bottom: 8px; }
+
+  .summary-strip { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 18px; }
+  .stat { }
+  .stat .n { font-family: var(--mono); font-size: 22px; color: var(--signal); line-height: 1; }
+  .stat .n.zero { color: var(--alert); }
+  .stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-dim); margin-top: 4px; }
+
+  /* per-enzyme block */
+  .enz-block { border: 1px solid var(--panel-edge); border-radius: 5px; margin-bottom: 12px; overflow: hidden; }
+  .enz-block > .head {
+    display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+    background: var(--panel); cursor: pointer; user-select: none;
+  }
+  .enz-block > .head:hover { background: #222a32; }
+  .enz-block .name { font-family: var(--mono); font-weight: 600; font-size: 13px; color: var(--ink); }
+  .enz-block .site-tag { font-family: var(--mono); font-size: 11px; color: var(--ink-dim); }
+  .enz-block .count-pill {
+    margin-left: auto; font-family: var(--mono); font-size: 11px;
+    padding: 2px 9px; border-radius: 10px; background: var(--signal-dim); color: #d6ffec;
+  }
+  .enz-block .count-pill.zero { background: #4a2620; color: #ffbcae; }
+  .enz-block .ohang { font-family: var(--mono); font-size: 10px; color: var(--ink-faint); }
+
+  .enz-body { display: none; padding: 4px 0 8px; }
+  .enz-block.open .enz-body { display: block; }
+
+  table.hits { width: 100%; border-collapse: collapse; font-family: var(--mono); font-size: 11px; }
+  table.hits th {
+    text-align: left; color: var(--ink-faint); font-weight: 500; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.05em; padding: 6px 14px; border-bottom: 1px solid var(--panel-edge);
+  }
+  table.hits td { padding: 5px 14px; color: var(--ink-dim); border-bottom: 1px solid rgba(43,52,61,0.4); }
+  table.hits tr:hover td { background: rgba(79,227,161,0.04); color: var(--ink); }
+  .cai-bar { display: inline-block; width: 46px; height: 6px; background: var(--chassis); border-radius: 3px; overflow: hidden; vertical-align: middle; margin-right: 6px; }
+  .cai-bar > span { display: block; height: 100%; }
+  .dna-seq .core { color: var(--signal); }
+  .dna-seq .flank { color: var(--ink-faint); }
+  .frame-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; background: var(--chassis); color: var(--ink-dim); }
+
+  /* collisions */
+  .collide-note { background: #2a1a16; border: 1px solid #5c3228; border-radius: 5px; padding: 12px 14px; margin-bottom: 16px; }
+  .collide-note h3 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--alert); }
+  .collide-note p { margin: 3px 0; font-size: 12px; color: var(--ink-dim); }
+  .collide-note code { font-family: var(--mono); color: var(--warn-amber); }
+
+  /* ---- optimizer panel ---- */
+  .opt-panel { border-color: var(--signal-dim); }
+  .opt-controls { display: flex; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  .opt-ctl { display: flex; flex-direction: column; gap: 4px; }
+  .opt-ctl span { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-dim); }
+  .opt-ctl select, .opt-ctl input { min-width: 150px; }
+  .opt-ctl.ghost { opacity: 0.4; }
+  .opt-ctl.ghost input { min-width: 90px; }
+  .opt-summary { display: flex; gap: 26px; margin-bottom: 18px; }
+  .opt-table .name { color: var(--signal); font-weight: 600; }
+
+  /* methylation warnings */
+  .meth-warn { font-size: 11px; line-height: 1.6; color: var(--ink-dim); margin: 4px 0; }
+  .meth-warn .mtag { display: inline-block; font-family: var(--mono); font-size: 9px; text-transform: uppercase;
+    letter-spacing: 0.05em; padding: 1px 5px; border-radius: 3px; margin-right: 6px; vertical-align: middle; }
+  .meth-warn.cloning .mtag { background: #4a2620; color: #ffb4a2; }
+  .meth-warn.mammal  .mtag { background: #2b2f1a; color: #d9e08a; }
+  .meth-warn.info    .mtag { background: var(--chassis); color: var(--ink-faint); }
+  .meth-block { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--panel-edge); }
+  .mbadge { font-family: var(--mono); font-size: 9px; padding: 1px 6px; border-radius: 3px; letter-spacing: 0.03em; }
+  .mbadge.cloning { background: #4a2620; color: #ffb4a2; }
+  .mbadge.mammal  { background: #2b2f1a; color: #d9e08a; }
+  .mbadge.clear   { color: var(--ink-faint); background: none; }
+
+  .genemap { position: relative; margin: 10px 0 30px; padding-top: 26px; }
+  .genemap .track { height: 3px; background: var(--panel-edge); border-radius: 2px; position: relative; }
+  .genemap .tick { position: absolute; top: 26px; transform: translateX(-50%); }
+  .genemap .tick::before { content:''; position:absolute; top:-9px; left:50%; width:2px; height:12px; background:var(--signal); transform:translateX(-50%); }
+  .genemap .tlabel { position:absolute; top:-26px; left:50%; transform:translateX(-50%) rotate(-38deg); transform-origin:bottom left;
+    font-family: var(--mono); font-size:10px; color:var(--ink); white-space:nowrap; }
+  .genemap .mapends { display:flex; justify-content:space-between; font-family:var(--mono); font-size:10px; color:var(--ink-faint); margin-top:8px; }
+  .genemap .exclzone { position:absolute; top:26px; height:3px; background:repeating-linear-gradient(45deg,var(--panel-edge),var(--panel-edge) 3px,transparent 3px,transparent 6px); }
+  .margin-note { font-size:11px; color:var(--ink-dim); margin:-16px 0 18px; line-height:1.6; }
+  .margin-note .subtle { color:var(--ink-faint); }
+
+  .dropped-note { margin-top: 14px; font-size: 12px; color: var(--ink-dim); line-height: 1.9; }
+  .dropped-note b { color: var(--ink); }
+  .dropped-note .subtle { color: var(--ink-faint); font-size: 11px; }
+  .dropped-note .drop { font-family: var(--mono); font-size: 11px; margin-right: 4px; }
+  .dropped-note .drop em { color: var(--ink-faint); font-style: normal; }
+
+  /* clickable veto affordances */
+  .chosen-row { cursor: pointer; }
+  .chosen-row td.veto { color: var(--ink-faint); text-align: center; font-size: 14px; width: 20px; }
+  .chosen-row:hover td { background: rgba(232,102,75,0.08); }
+  .chosen-row:hover td.veto { color: var(--alert); }
+  .drop.clickable { cursor: pointer; padding: 1px 6px; border-radius: 3px; border: 1px solid transparent; }
+  .drop.clickable:hover { border-color: var(--alert); color: var(--ink); }
+  .vetoed-note { margin-top: 12px; font-size: 12px; color: var(--ink-dim); line-height: 2; padding-top: 12px; border-top: 1px solid var(--panel-edge); }
+  .vetoed-note b { color: var(--alert); }
+  .vetoed-note .subtle { color: var(--ink-faint); font-size: 11px; }
+  .drop.vetoed { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); text-decoration: line-through; border: 1px solid var(--panel-edge); }
+  .drop.vetoed:hover { color: var(--signal); border-color: var(--signal-dim); text-decoration: none; }
+
+  .legend { margin-top: 22px; font-size: 11px; color: var(--ink-faint); line-height: 1.7; }
+
+  .inline-link { color: var(--signal); cursor: pointer; text-decoration: none; white-space: nowrap; }
+  .inline-link:hover { text-decoration: underline; }
+
+  /* codon table modal */
+  .modal-back { position: fixed; inset: 0; background: rgba(8,10,13,0.72); display: flex;
+    align-items: center; justify-content: center; z-index: 50; padding: 24px; }
+  .modal { background: var(--panel); border: 1px solid var(--panel-edge); border-radius: 8px;
+    max-width: 760px; width: 100%; max-height: 88vh; overflow-y: auto; padding: 22px; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .modal-head h2 { font-size: 13px; font-weight: 600; letter-spacing: 0.02em; color: var(--ink); margin: 0; text-transform: none; }
+  .modal-x { background: none; border: none; color: var(--ink-dim); font-size: 22px; cursor: pointer; line-height: 1; padding: 0 4px; }
+  .modal-x:hover { color: var(--ink); }
+  .modal-sub { font-size: 11px; color: var(--ink-faint); margin-bottom: 16px; }
+  .modal-foot { margin-top: 16px; font-size: 10px; color: var(--ink-faint); line-height: 1.6; border-top: 1px solid var(--panel-edge); padding-top: 12px; }
+  .codon-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px 16px; font-family: var(--mono); font-size: 11px; }
+  .codon-cell { display: grid; grid-template-columns: 42px 18px 34px 1fr; align-items: center; gap: 6px; padding: 2px 0; }
+  .codon-cell .cd { color: var(--ink); }
+  .codon-cell .aa { color: var(--ink-dim); }
+  .codon-cell .wv { color: var(--ink-faint); text-align: right; }
+  .codon-cell .wb { height: 5px; background: var(--chassis); border-radius: 2px; overflow: hidden; }
+  .codon-cell .wb > span { display: block; height: 100%; }
+  .codon-cell.best .cd { color: var(--signal); font-weight: 600; }
+  .codon-cell.stop { opacity: 0.4; }
+  .codon-blockgap { grid-column: 1/-1; height: 8px; }
+  .legend b { color: var(--ink-dim); font-weight: 600; }
+  .legend .sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:middle; margin-right:5px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="mast">
+    <span class="glyph">&#9633;&#9632;&#9633;&#9632;</span>
+    <h1>Silent Sites</h1>
+    <span class="sub">restriction placement finder · runs entirely in your browser</span>
+  </header>
+
+  <div class="grid">
+    <!-- ============ INPUT COLUMN ============ -->
+    <div>
+      <div class="panel">
+        <h2>Input</h2>
+        <label class="field">
+          <span class="lab">Protein sequence — one-letter amino acids</span>
+          <textarea id="protein" placeholder="MEFKLVDATRGSHV...&#10;&#10;Paste one protein. Whitespace, numbers and FASTA headers are ignored.">
+</textarea>
+        </label>
+        <div class="row2">
+          <label class="field" style="margin-bottom:0;">
+            <span class="lab">Host codon table</span>
+            <select id="host">
+              <option value="ecoli">E. coli</option>
+              <option value="human" selected>Human — GenScript-matched</option>
+              <option value="yeast">S. cerevisiae</option>
+            </select>
+          </label>
+          <label class="field" style="margin-bottom:0;">
+            <span class="lab">Min CAI to report</span>
+            <input type="number" id="minCai" value="0" min="0" max="1" step="0.05">
+          </label>
+        </div>
+        <div class="hint">A placement is only shown if its best synonymous codon assignment scores at or above this CAI. Set to 0 to see every possibility including expensive ones. <a id="viewTable" class="inline-link">View codon table →</a></div>
+      </div>
+
+      <div class="panel">
+        <h2>Enzyme palette</h2>
+        <div class="enz-toolbar">
+          <a id="selAll">all</a><a id="selNone">none</a>
+          <a id="selSticky">sticky only</a><a id="selFixed">fixed only</a>
+        </div>
+        <div class="enz-list" id="enzList"></div>
+      </div>
+
+      <button class="run" id="runBtn">Find placements</button>
+      <div class="hint" style="margin-top:10px;">Nothing you paste leaves this page — the whole analysis runs locally in JavaScript.</div>
+    </div>
+
+    <!-- ============ RESULTS COLUMN ============ -->
+    <div id="results">
+      <div class="placeholder-panel">
+        <div class="big">no sequence analysed yet</div>
+        <div>Paste a protein, choose your palette, and run.<br>Every silent placement in all three reading frames will appear here, with its codon cost.</div>
+      </div>
+    </div>
+  </div>
+<div id="tableModal" class="modal-back" style="display:none;">
+  <div class="modal">
+    <div class="modal-head">
+      <h2 id="modalTitle">Codon table</h2>
+      <button id="modalClose" class="modal-x">&times;</button>
+    </div>
+    <div class="modal-sub" id="modalSub"></div>
+    <div id="modalBody"></div>
+    <div class="modal-foot">
+      <span class="sw" style="background:var(--signal)"></span>w = relative adaptiveness (codon frequency ÷ most-used synonym). The optimal codon per amino acid = 1.00.
+      Human values are derived from GenScript's published fractions.
+    </div>
+  </div>
+</div>
+
+<script>
+/* ======================================================================
+   GENETIC CODE + HOST WEIGHT TABLES
+   ====================================================================== */
+const CODON_TABLE = {
+  TTT:'F',TTC:'F',TTA:'L',TTG:'L',CTT:'L',CTC:'L',CTA:'L',CTG:'L',
+  ATT:'I',ATC:'I',ATA:'I',ATG:'M',GTT:'V',GTC:'V',GTA:'V',GTG:'V',
+  TCT:'S',TCC:'S',TCA:'S',TCG:'S',CCT:'P',CCC:'P',CCA:'P',CCG:'P',
+  ACT:'T',ACC:'T',ACA:'T',ACG:'T',GCT:'A',GCC:'A',GCA:'A',GCG:'A',
+  TAT:'Y',TAC:'Y',TAA:'*',TAG:'*',CAT:'H',CAC:'H',CAA:'Q',CAG:'Q',
+  AAT:'N',AAC:'N',AAA:'K',AAG:'K',GAT:'D',GAC:'D',GAA:'E',GAG:'E',
+  TGT:'C',TGC:'C',TGA:'*',TGG:'W',CGT:'R',CGC:'R',CGA:'R',CGG:'R',
+  AGT:'S',AGC:'S',AGA:'R',AGG:'R',GGT:'G',GGC:'G',GGA:'G',GGG:'G'
+};
+const AA_TO_CODONS = {};
+for (const [c,a] of Object.entries(CODON_TABLE)) (AA_TO_CODONS[a]=AA_TO_CODONS[a]||[]).push(c);
+
+// Relative adaptiveness (w) tables. Values are freq(codon)/freq(max synonym).
+const W = {
+  ecoli: {
+    TTT:0.51,TTC:1,TTA:0.06,TTG:0.07,CTT:0.10,CTC:0.10,CTA:0.03,CTG:1,
+    ATT:0.51,ATC:1,ATA:0.07,ATG:1,GTT:0.60,GTC:0.40,GTA:0.30,GTG:1,
+    TCT:0.55,TCC:0.50,TCA:0.11,TCG:0.32,CCT:0.16,CCC:0.10,CCA:0.20,CCG:1,
+    ACT:0.35,ACC:1,ACA:0.13,ACG:0.35,GCT:0.35,GCC:0.40,GCA:0.31,GCG:1,
+    TAT:0.53,TAC:1,TAA:1,TAG:0.07,CAT:0.52,CAC:1,CAA:0.31,CAG:1,
+    AAT:0.47,AAC:1,AAA:1,AAG:0.25,GAT:0.63,GAC:1,GAA:1,GAG:0.37,
+    TGT:0.44,TGC:1,TGA:0.30,TGG:1,CGT:1,CGC:0.72,CGA:0.06,CGG:0.11,
+    AGT:0.25,AGC:1,AGA:0.04,AGG:0.03,GGT:0.94,GGC:1,GGA:0.11,GGG:0.30
+  },
+  human: {
+    TTT:0.82,TTC:1,TTA:0.17,TTG:0.32,CTT:0.32,CTC:0.49,CTA:0.17,CTG:1,
+    ATT:0.75,ATC:1,ATA:0.33,ATG:1,GTT:0.38,GTC:0.51,GTA:0.23,GTG:1,
+    TCT:0.75,TCC:0.92,TCA:0.62,TCG:0.25,CCT:0.85,CCC:1,CCA:0.82,CCG:0.33,
+    ACT:0.67,ACC:1,ACA:0.78,ACG:0.33,GCT:0.65,GCC:1,GCA:0.57,GCG:0.27,
+    TAT:0.75,TAC:1,TAA:0.54,TAG:0.38,CAT:0.69,CAC:1,CAA:0.33,CAG:1,
+    AAT:0.85,AAC:1,AAA:0.72,AAG:1,GAT:0.85,GAC:1,GAA:0.72,GAG:1,
+    TGT:0.82,TGC:1,TGA:1,TGG:1,CGT:0.38,CGC:0.9,CGA:0.52,CGG:1,
+    AGT:0.62,AGC:1,AGA:0.95,AGG:0.95,GGT:0.47,GGC:1,GGA:0.74,GGG:0.74
+  },
+  yeast: {
+    TTT:0.91,TTC:1,TTA:0.80,TTG:1,CTT:0.28,CTC:0.10,CTA:0.32,CTG:0.16,
+    ATT:1,ATC:0.55,ATA:0.42,ATG:1,GTT:1,GTC:0.42,GTA:0.31,GTG:0.44,
+    TCT:1,TCC:0.66,TCA:0.61,TCG:0.24,CCT:0.68,CCC:0.24,CCA:1,CCG:0.17,
+    ACT:1,ACC:0.63,ACA:0.68,ACG:0.24,GCT:1,GCC:0.51,GCA:0.52,GCG:0.13,
+    TAT:0.71,TAC:1,TAA:1,TAG:0.31,CAT:0.68,CAC:1,CAA:1,CAG:0.35,
+    AAT:0.87,AAC:1,AAA:0.79,AAG:1,GAT:1,GAC:0.55,GAA:1,GAG:0.42,
+    TGT:1,TGC:0.37,TGA:0.42,TGG:1,CGT:0.56,CGC:0.11,CGA:0.09,CGG:0.06,
+    AGT:0.45,AGC:0.33,AGA:1,AGG:0.28,GGT:1,GGC:0.30,GGA:0.35,GGG:0.13
+  }
+};
+
+/* ======================================================================
+   ENZYME PALETTE  (matches the audited set from planning)
+   overhang: descriptive; tier: sticky | blunt | degenerate
+   note: buffer/methylation caveats
+   ====================================================================== */
+const ENZYMES = [
+  // fixed sticky
+  {name:'AgeI',  site:'ACCGGT', tier:'sticky', ohang:"5' CCGG"},
+  {name:'BamHI', site:'GGATCC', tier:'sticky', ohang:"5' GATC"},
+  {name:'BsiWI', site:'CGTACG', tier:'sticky', ohang:"5' GTAC", coll:'GTAC'},
+  {name:'BsrGI', site:'TGTACA', tier:'sticky', ohang:"5' GTAC", coll:'GTAC'},
+  {name:'ClaI',  site:'ATCGAT', tier:'sticky', ohang:"5' CG", note:'Dam-blocked by ATCGATC / GATCGAT overlap'},
+  {name:'EcoRI', site:'GAATTC', tier:'sticky', ohang:"5' AATT"},
+  {name:'AscI',  site:'GGCGCGCC', tier:'sticky', ohang:"5' CGCG"},
+  {name:'AsiSI', site:'GCGATCGC', tier:'sticky', ohang:"3' AT", coll:'3AT'},
+  {name:'NotI',  site:'GCGGCCGC', tier:'sticky', ohang:"5' GGCC"},
+  {name:'SbfI',  site:'CCTGCAGG', tier:'sticky', ohang:"3' TGCA"},
+  {name:'FseI',  site:'GGCCGGCC', tier:'sticky', ohang:"3' CCGG"},
+  {name:'PacI',  site:'TTAATTAA', tier:'sticky', ohang:"3' AT", coll:'3AT'},
+  // blunt
+  {name:'AfeI',  site:'AGCGCT', tier:'blunt', ohang:'blunt'},
+  {name:'EcoRV', site:'GATATC', tier:'blunt', ohang:'blunt'},
+  {name:'HpaI',  site:'GTTAAC', tier:'blunt', ohang:'blunt'},
+  {name:'PmlI',  site:'CACGTG', tier:'blunt', ohang:'blunt'},
+  // degenerate reserve
+  {name:'BstEII',site:'GGTNACC', tier:'degenerate', ohang:"5' GTNAC", note:'use BstEII-HF for rCutSmart'},
+  {name:'Bsu36I',site:'CCTNAGG', tier:'degenerate', ohang:"3' TNA (you set N)"},
+  {name:'EcoNI', site:'CCTNNNNNAGG', tier:'degenerate', ohang:'variable'},
+  {name:'PflMI', site:'CCANNNNNTGG', tier:'degenerate', ohang:'3\' (you set)'},
+  {name:'PpuMI', site:'RGGWCCY', tier:'degenerate', ohang:'variable'},
+  {name:'XcmI',  site:'CCANNNNNNNNNTGG', tier:'degenerate', ohang:'variable'},
+  {name:'BbvCI', site:'CCTCAGC', tier:'degenerate', ohang:"buffer unconfirmed"},
+  {name:'BlpI',  site:'GCTNAGC', tier:'degenerate', ohang:"buffer unconfirmed"},
+];
+
+/* Methylation sensitivity, derived from the recognition site mechanics and
+   cross-checked against NEB. Two severities:
+   'cloning'  — Dam/Dcm: affects plasmid grown in standard E. coli. Flank-
+                dependent here, so avoidable by codon choice at placement.
+   'mammalian'— CpG: only affects DNA carrying CpG methylation (i.e. digesting
+                DNA recovered from mammalian cells). Irrelevant to E. coli-grown
+                plasmid, which is how cloning DNA is normally prepared. */
+const METH = {
+  ClaI:   { cloning: 'Dam-blocked if the flanks form ATCGATC or GATCGAT — choose neighbouring codons that avoid a GATC overlap.', mammalian: true },
+  AsiSI:  { cloning: 'Dam-blocked if a GATC overlaps the site — check the base just 5\u2032 of GCGATCGC.', mammalian: true },
+  FseI:   { cloning: 'Dcm-blocked if a CCWGG context forms at the flank (site followed by AGG/TGG) — avoid that context in the neighbouring codons.', mammalian: true },
+  EcoNI:  { cloning: 'Dcm-blocked if a CCWGG context forms at the flank.' },
+  PflMI:  { cloning: 'Dcm-blocked if a CCWGG context forms at the flank.' },
+  XcmI:   { cloning: 'Dcm-blocked if a CCWGG context forms at the flank.' },
+  AgeI:   { mammalian: true },
+  BsiWI:  { mammalian: true },
+  AscI:   { mammalian: true },
+  NotI:   { mammalian: true },
+  AfeI:   { mammalian: true },
+  PmlI:   { mammalian: true },
+  BamHI:  { info: 'Contains GATC but is NOT Dam-blocked — cuts normally in dam+ DNA.' },
+  Bsu36I: { info: 'Insensitive to Dam, Dcm and CpG methylation.' },
+};
+
+const IUPAC = {A:['A'],C:['C'],G:['G'],T:['T'],R:['A','G'],Y:['C','T'],S:['G','C'],
+  W:['A','T'],K:['G','T'],M:['A','C'],B:['C','G','T'],D:['A','G','T'],
+  H:['A','C','T'],V:['A','C','G'],N:['A','C','G','T']};
+const matchIUPAC = (base,code) => IUPAC[code].includes(base);
+
+/* ======================================================================
+   CORE PLACEMENT ENGINE  (verified in Node before UI was written)
+   ====================================================================== */
+function findPlacements(protein, site, wtab, minCai) {
+  const out = [];
+  const L = site.length;
+  for (let aaStart = 0; aaStart < protein.length; aaStart++) {
+    for (let offset = 0; offset < 3; offset++) {
+      const span = Math.ceil((offset + L) / 3);
+      if (aaStart + span > protein.length) continue;
+      const aas = protein.slice(aaStart, aaStart + span).split('');
+      let combos = [''];
+      let ok = true;
+      for (let ci = 0; ci < aas.length; ci++) {
+        const cands = AA_TO_CODONS[aas[ci]];
+        if (!cands) { ok = false; break; }
+        const next = [];
+        for (const prefix of combos) {
+          for (const cod of cands) {
+            let good = true;
+            for (let k = 0; k < 3; k++) {
+              const sitePos = ci*3 + k - offset;
+              if (sitePos >= 0 && sitePos < L && !matchIUPAC(cod[k], site[sitePos])) { good = false; break; }
+            }
+            if (good) next.push(prefix + cod);
+          }
+        }
+        combos = next;
+        if (!combos.length) { ok = false; break; }
+      }
+      if (!ok || !combos.length) continue;
+      // best CAI assignment
+      let best = null, bestScore = -1;
+      for (const dna of combos) {
+        let logsum = 0;
+        for (let ci = 0; ci < aas.length; ci++)
+          logsum += Math.log(wtab[dna.slice(ci*3,ci*3+3)] || 0.01);
+        const s = Math.exp(logsum / aas.length);
+        if (s > bestScore) { bestScore = s; best = dna; }
+      }
+      if (bestScore < minCai) continue;
+      out.push({ aaStart, offset, span, aaContext: aas.join(''), dna: best, cai: bestScore,
+                 siteStartNt: aaStart*3 + offset });
+    }
+  }
+  return out;
+}
+
+/* ======================================================================
+   COMBO OPTIMIZER
+   Chooses a set of placements — one position per enzyme — that maximises
+   coverage and CAI while keeping every pair of sites at least minGap apart
+   and never pairing two enzymes that share an overhang (collision group).
+   Exact branch-and-bound with a node cap; returns the true optimum for
+   normal genes and a strong solution (never an invalid one) if capped.
+   Objective = (number of sites) + caiWeight x (mean CAI).
+   ====================================================================== */
+function collisionGroup(enz) {
+  if (enz.coll) return enz.coll;          // GTAC pair, 3AT pair
+  if (enz.tier === 'blunt') return 'BLUNT'; // all blunt cutters inter-ligate
+  return null;
+}
+
+function optimizeCombo(candidates, minGap, caiWeight, nodeCap = 200000) {
+  // candidates: [{enz, hits:[{siteStartNt,cai,...}]}] already filtered to placeable
+  const opts = [];
+  for (const c of candidates)
+    for (const h of c.hits)
+      opts.push({ name: c.enz.name, coll: collisionGroup(c.enz), pos: h.siteStartNt, cai: h.cai });
+  opts.sort((a, b) => a.pos - b.pos);
+
+  const meanCai = arr => arr.length ? arr.reduce((s, x) => s + x.cai, 0) / arr.length : 0;
+  const scoreOf = arr => arr.length + caiWeight * meanCai(arr);
+
+  let best = [], bestScore = -1, nodes = 0, capped = false;
+
+  // optimistic bound: current + number of distinct enzymes still available ahead
+  function bound(chosen, idx) {
+    const names = new Set();
+    for (let i = idx; i < opts.length; i++) names.add(opts[i].name);
+    return chosen.length + names.size + caiWeight;
+  }
+
+  function bt(idx, chosen, uName, uColl) {
+    if (++nodes > nodeCap) { capped = true; return; }
+    const sc = scoreOf(chosen);
+    if (sc > bestScore) { bestScore = sc; best = [...chosen]; }
+    if (bound(chosen, idx) <= bestScore) return; // prune
+    for (let i = idx; i < opts.length; i++) {
+      if (capped) return;
+      const o = opts[i];
+      if (uName.has(o.name) || (o.coll && uColl.has(o.coll))) continue;
+      if (chosen.some(c => Math.abs(c.pos - o.pos) < minGap)) continue;
+      uName.add(o.name); if (o.coll) uColl.add(o.coll); chosen.push(o);
+      bt(i + 1, chosen, uName, uColl);
+      chosen.pop(); uName.delete(o.name); if (o.coll) uColl.delete(o.coll);
+    }
+  }
+  const t0 = Date.now();
+  bt(0, [], new Set(), new Set());
+  return { combo: best.sort((a, b) => a.pos - b.pos), ms: Date.now() - t0, nodes, capped,
+           meanCai: meanCai(best) };
+}
+
+/* ======================================================================
+   UI
+   ====================================================================== */
+function cleanProtein(raw) {
+  return raw.split('\n').filter(l => !l.startsWith('>')).join('')
+            .toUpperCase().replace(/[^A-Z]/g,'')
+            .replace(/[^ACDEFGHIKLMNPQRSTVWY]/g,'');
+}
+
+const enzListEl = document.getElementById('enzList');
+function buildEnzList() {
+  const tiers = {sticky:'Sticky — cassette swapping', blunt:'Blunt — diagnostic', degenerate:'Degenerate reserve'};
+  let html = '';
+  for (const t of ['sticky','blunt','degenerate']) {
+    html += `<div class="tier-head">${tiers[t]}</div>`;
+    for (const e of ENZYMES.filter(x=>x.tier===t)) {
+      const checked = (t==='sticky') ? 'checked' : '';
+      html += `<label class="enz-item"><input type="checkbox" data-enz="${e.name}" ${checked}>
+        <span>${e.name}</span><span class="site">${e.site}</span></label>`;
+    }
+  }
+  enzListEl.innerHTML = html;
+}
+buildEnzList();
+
+const setChecks = (fn) => enzListEl.querySelectorAll('input').forEach(cb => {
+  const e = ENZYMES.find(x=>x.name===cb.dataset.enz); cb.checked = fn(e);
+});
+document.getElementById('selAll').onclick  = () => setChecks(()=>true);
+document.getElementById('selNone').onclick = () => setChecks(()=>false);
+document.getElementById('selSticky').onclick=() => setChecks(e=>e.tier==='sticky');
+document.getElementById('selFixed').onclick =() => setChecks(e=>e.tier!=='degenerate');
+
+const caiColor = c => c>=0.8 ? 'var(--signal)' : c>=0.6 ? 'var(--warn-amber)' : 'var(--alert)';
+
+// Methylation warning line for an enzyme block. Returns '' if nothing to say.
+function methLine(name, style='') {
+  const m = METH[name];
+  if (!m) return '';
+  let out = '';
+  if (m.cloning) out += `<div class="meth-warn cloning" style="${style}"><span class="mtag">Dam/Dcm</span> ${m.cloning}</div>`;
+  if (m.mammalian) out += `<div class="meth-warn mammal" style="${style}"><span class="mtag">CpG</span> CpG-sensitive — only matters if you digest DNA recovered from mammalian cells; E. coli-grown plasmid is unaffected.</div>`;
+  if (m.info) out += `<div class="meth-warn info" style="${style}"><span class="mtag">note</span> ${m.info}</div>`;
+  return out;
+}
+// Compact badges for table rows: show every applicable flag, not just one.
+function methBadge(name) {
+  const m = METH[name];
+  if (!m) return '';
+  const badges = [];
+  if (m.cloning) badges.push(`<span class="mbadge cloning" title="${m.cloning.replace(/"/g,'')}">Dam/Dcm</span>`);
+  if (m.mammalian) badges.push(`<span class="mbadge mammal" title="CpG-sensitive — only affects mammalian-passaged DNA, not E. coli plasmid">CpG</span>`);
+  return badges.join(' ');
+}
+
+function render(protein, results, host) {
+  const R = document.getElementById('results');
+  const chosen = results.filter(r=>r.enabled);
+  const totalHits = chosen.reduce((s,r)=>s+r.hits.length,0);
+  const placeable = chosen.filter(r=>r.hits.length>0).length;
+  const impossible = chosen.filter(r=>r.hits.length===0);
+
+  let html = `<div class="panel">`;
+  html += `<div class="summary-strip">
+    <div class="stat"><div class="n">${protein.length}</div><div class="k">residues · ${protein.length*3} nt</div></div>
+    <div class="stat"><div class="n">${placeable}</div><div class="k">enzymes placeable</div></div>
+    <div class="stat"><div class="n ${impossible.length?'':''}">${totalHits}</div><div class="k">total placements</div></div>
+    <div class="stat"><div class="n ${impossible.length?'zero':''}">${impossible.length}</div><div class="k">cannot be placed</div></div>
+  </div>`;
+
+  // collision detection among placeable enzymes
+  const placeableNames = new Set(chosen.filter(r=>r.hits.length).map(r=>r.enz.name));
+  const collides = [];
+  const gtac = ['BsiWI','BsrGI'].filter(n=>placeableNames.has(n));
+  const at3  = ['AsiSI','PacI'].filter(n=>placeableNames.has(n));
+  if (gtac.length===2) collides.push(`<code>${gtac.join(' + ')}</code> both leave a <code>GTAC</code> overhang — a fragment cut with one can religate into the other. Use only one per cassette, or put a non-GTAC enzyme on the opposite flank.`);
+  if (at3.length===2) collides.push(`<code>${at3.join(' + ')}</code> both leave a <code>3' AT</code> overhang — same cross-ligation risk. Pick one per cassette, or use the pair deliberately for an orientation-agnostic insert.`);
+  const bluntPlaceable = chosen.filter(r=>r.hits.length && r.enz.tier==='blunt').map(r=>r.enz.name);
+  if (bluntPlaceable.length>1) collides.push(`Blunt cutters (<code>${bluntPlaceable.join(', ')}</code>) all ligate to each other. Keep them as single diagnostic markers, not cassette brackets.`);
+
+  if (collides.length) {
+    html += `<div class="collide-note"><h3>Overhang collisions to resolve at placement</h3>`;
+    collides.forEach(c => html += `<p>${c}</p>`);
+    html += `</div>`;
+  }
+
+  // per-enzyme blocks
+  for (const r of chosen) {
+    const e = r.enz;
+    const zero = r.hits.length===0;
+    html += `<div class="enz-block ${zero?'':''}">
+      <div class="head" onclick="this.parentNode.classList.toggle('open')">
+        <span class="name">${e.name}</span>
+        <span class="site-tag">${e.site}</span>
+        <span class="ohang">${e.ohang}</span>
+        <span class="count-pill ${zero?'zero':''}">${zero?'impossible':r.hits.length+' site'+(r.hits.length>1?'s':'')}</span>
+      </div>`;
+    if (!zero) {
+      // sort by position
+      const hits = r.hits.slice().sort((a,b)=>a.siteStartNt-b.siteStartNt);
+      html += `<div class="enz-body"><table class="hits">
+        <thead><tr><th>aa pos</th><th>nt pos</th><th>frame</th><th>context</th><th>codons placed</th><th>CAI</th></tr></thead><tbody>`;
+      for (const h of hits) {
+        const pct = Math.round(h.cai*100);
+        html += `<tr>
+          <td>${h.aaStart+1}</td>
+          <td>${h.siteStartNt+1}</td>
+          <td><span class="frame-tag">+${h.offset}</span></td>
+          <td>${h.aaContext}</td>
+          <td class="dna-seq">${formatDna(h.dna, h.offset, e.site.length)}</td>
+          <td><span class="cai-bar"><span style="width:${pct}%;background:${caiColor(h.cai)}"></span></span>${h.cai.toFixed(2)}</td>
+        </tr>`;
+      }
+      html += `</tbody></table>`;
+      if (e.note) html += `<div class="hint" style="padding:6px 14px 2px;">note — ${e.note}</div>`;
+      html += methLine(e.name, 'padding:6px 14px 2px;');
+      html += `</div>`;
+    } else {
+      html += `<div class="enz-body"><div class="hint" style="padding:8px 14px;">No silent placement exists anywhere in this protein, in any frame, at any codon cost. The dipeptide/tripeptide this site needs never occurs in a reachable arrangement. ${e.note?'('+e.note+')':''}</div></div>`;
+    }
+    html += `</div>`;
+  }
+
+  html += `<div class="legend">
+    <b>Reading the readout.</b> &nbsp;
+    <span class="sw" style="background:var(--signal)"></span>CAI &ge; 0.80 (cheap) &nbsp;
+    <span class="sw" style="background:var(--warn-amber)"></span>0.60–0.79 (some cost) &nbsp;
+    <span class="sw" style="background:var(--alert)"></span>&lt; 0.60 (rare codons forced).<br>
+    <b>frame +0</b> = site sits in codon register; <b>+1 / +2</b> = site straddles codons using wobble positions — these are the placements a by-eye dipeptide scan misses.
+    <b>nt pos</b> is the 1-based position of the site's first base in the coding sequence, for dropping into your map.
+    Green bases are the recognition site; dim bases are the rest of the codons it sits in.
+  </div>`;
+  html += `</div>`;
+  R.innerHTML = html;
+  // open the first placeable block by default
+  const firstOpen = R.querySelector('.enz-block');
+  if (firstOpen) firstOpen.classList.add('open');
+}
+
+function formatDna(dna, offset, siteLen) {
+  let s='';
+  for (let i=0;i<dna.length;i++){
+    const inSite = i>=offset && i<offset+siteLen;
+    s += `<span class="${inSite?'core':'flank'}">${dna[i]}</span>`;
+  }
+  return s;
+}
+
+/* ---- codon table viewer ---- */
+const HOST_LABEL = { ecoli:'E. coli', human:'Human (GenScript-matched)', yeast:'S. cerevisiae' };
+// standard genetic-code display order: rows by 2nd base within 1st base blocks
+const DISPLAY_ORDER = [
+  'TTT','TTC','TTA','TTG','CTT','CTC','CTA','CTG','ATT','ATC','ATA','ATG','GTT','GTC','GTA','GTG',
+  'TCT','TCC','TCA','TCG','CCT','CCC','CCA','CCG','ACT','ACC','ACA','ACG','GCT','GCC','GCA','GCG',
+  'TAT','TAC','TAA','TAG','CAT','CAC','CAA','CAG','AAT','AAC','AAA','AAG','GAT','GAC','GAA','GAG',
+  'TGT','TGC','TGA','TGG','CGT','CGC','CGA','CGG','AGT','AGC','AGA','AGG','GGT','GGC','GGA','GGG'
+];
+
+function renderCodonTable() {
+  const host = document.getElementById('host').value;
+  const wtab = W[host];
+  document.getElementById('modalTitle').textContent = `Codon table — ${HOST_LABEL[host]}`;
+  document.getElementById('modalSub').textContent =
+    'Green = the preferred (highest-w) codon for each amino acid. These are the codons the tool reaches for first when placing a site silently.';
+  // best-per-AA for highlighting
+  const bestPerAA = {};
+  for (const c of Object.keys(CODON_TABLE)) {
+    const aa = CODON_TABLE[c];
+    if (!(aa in bestPerAA) || wtab[c] > wtab[bestPerAA[aa]]) bestPerAA[aa] = c;
+  }
+  let html = '<div class="codon-grid">';
+  DISPLAY_ORDER.forEach((c, i) => {
+    const aa = CODON_TABLE[c];
+    const w = wtab[c];
+    const isBest = bestPerAA[aa] === c && aa !== '*';
+    const isStop = aa === '*';
+    const pct = Math.round(w * 100);
+    const col = w>=0.8?'var(--signal)':w>=0.6?'var(--warn-amber)':w>=0.3?'var(--ink-dim)':'var(--alert)';
+    html += `<div class="codon-cell ${isBest?'best':''} ${isStop?'stop':''}">
+      <span class="cd">${c}</span>
+      <span class="aa">${aa==='*'?'&#9632;':aa}</span>
+      <span class="wv">${w.toFixed(2)}</span>
+      <span class="wb"><span style="width:${pct}%;background:${col}"></span></span>
+    </div>`;
+    // gap after every block of 16 (each 1st-base group) for readability
+    if ((i+1) % 16 === 0 && i < 63) html += '<div class="codon-blockgap"></div>';
+  });
+  html += '</div>';
+  document.getElementById('modalBody').innerHTML = html;
+  document.getElementById('tableModal').style.display = 'flex';
+}
+document.getElementById('viewTable').onclick = renderCodonTable;
+document.getElementById('modalClose').onclick = () => document.getElementById('tableModal').style.display = 'none';
+document.getElementById('tableModal').onclick = (e) => {
+  if (e.target.id === 'tableModal') e.target.style.display = 'none'; // click backdrop to close
+};
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') document.getElementById('tableModal').style.display = 'none';
+});
+
+document.getElementById('runBtn').onclick = () => {
+  const protein = cleanProtein(document.getElementById('protein').value);
+  if (protein.length < 2) {
+    document.getElementById('results').innerHTML =
+      `<div class="placeholder-panel"><div class="big">no protein detected</div><div>Paste a one-letter amino acid sequence into the input box, then run.</div></div>`;
+    return;
+  }
+  const host = document.getElementById('host').value;
+  const minCai = parseFloat(document.getElementById('minCai').value) || 0;
+  const wtab = W[host];
+  const enabledNames = new Set([...enzListEl.querySelectorAll('input:checked')].map(cb=>cb.dataset.enz));
+  const results = ENZYMES.map(e => ({
+    enz: e,
+    enabled: enabledNames.has(e.name),
+    hits: enabledNames.has(e.name) ? findPlacements(protein, e.site, wtab, minCai) : []
+  }));
+  STATE = { protein, results, host };
+  render(protein, results, host);
+  renderOptimizer();
+};
+
+const DISABLED = new Set(); // enzymes the user has vetoed from the suggestion
+
+function toggleEnzyme(name) {
+  if (DISABLED.has(name)) DISABLED.delete(name); else DISABLED.add(name);
+  renderOptimizer();
+}
+
+/* ---- optimizer panel ---- */
+function renderOptimizer() {
+  if (!STATE) return;
+  const proteinLen = STATE.protein.length;
+  // end margin: exclude sites within `margin` aa of either terminus
+  const marginInput = document.getElementById('optMargin');
+  let margin = marginInput ? (parseInt(marginInput.value) || 0) : 30;
+  // guard against a margin so large it erases the whole gene
+  const maxSensible = Math.max(0, Math.floor((proteinLen - 1) / 2));
+  if (margin > maxSensible) margin = maxSensible;
+  const loAA = margin;                    // first allowed aa index (0-based)
+  const hiAA = proteinLen - margin;       // one past last allowed aa index
+
+  const allPlaceable = STATE.results
+    .filter(r => r.enabled && r.hits.length > 0)
+    .map(r => ({
+      enz: r.enz,
+      // keep only hits whose site START falls inside the allowed window
+      hits: r.hits.filter(h => h.aaStart >= loAA && h.aaStart < hiAA)
+    }))
+    .filter(r => r.hits.length > 0);
+  const placeable = allPlaceable.filter(r => !DISABLED.has(r.enz.name));
+  // how many enzymes lost ALL their positions to the margin (for reporting)
+  const nEnabledPlaceable = STATE.results.filter(r => r.enabled && r.hits.length > 0).length;
+  const excludedByMargin = nEnabledPlaceable - allPlaceable.length;
+  // read controls (or defaults on first render)
+  const preset  = document.getElementById('optPreset')?.value || 'coverage';
+  const presets = {
+    coverage: { gap: 150, cai: 0.3, label: 'Max coverage' },
+    balanced: { gap: 250, cai: 1.0, label: 'Balanced' },
+    quality:  { gap: 350, cai: 4.0, label: 'Fewer, cheaper' },
+    custom:   null
+  };
+  let gap, caiW;
+  if (preset === 'custom') {
+    gap  = parseInt(document.getElementById('optGap').value) || 150;
+    caiW = parseFloat(document.getElementById('optCaiW').value) || 1;
+  } else {
+    gap = presets[preset].gap; caiW = presets[preset].cai;
+  }
+
+  const { combo, ms, capped, meanCai } = optimizeCombo(placeable, gap, caiW);
+
+  let html = `<div class="panel opt-panel">
+    <h2>Suggested combination</h2>
+    <div class="opt-controls">
+      <label class="opt-ctl"><span>Strategy</span>
+        <select id="optPreset">
+          <option value="coverage" ${preset==='coverage'?'selected':''}>Max coverage — most sites</option>
+          <option value="balanced" ${preset==='balanced'?'selected':''}>Balanced</option>
+          <option value="quality" ${preset==='quality'?'selected':''}>Fewer, cheaper codons</option>
+          <option value="custom" ${preset==='custom'?'selected':''}>Custom…</option>
+        </select>
+      </label>
+      <label class="opt-ctl ${preset==='custom'?'':'ghost'}"><span>Min spacing (nt)</span>
+        <input type="number" id="optGap" value="${gap}" min="30" step="10" ${preset==='custom'?'':'disabled'}>
+      </label>
+      <label class="opt-ctl ${preset==='custom'?'':'ghost'}"><span>CAI emphasis</span>
+        <input type="number" id="optCaiW" value="${caiW}" min="0" max="10" step="0.5" ${preset==='custom'?'':'disabled'}>
+      </label>
+      <label class="opt-ctl"><span>End margin (aa)</span>
+        <input type="number" id="optMargin" value="${margin}" min="0" step="5">
+      </label>
+    </div>`;
+
+  if (!combo.length) {
+    html += `<div class="hint" style="padding:8px 0;">No combination satisfies the spacing floor — try a smaller min spacing, or the palette has no placeable enzymes.</div></div>`;
+  } else {
+    const gaps = combo.map((c,i)=> i? c.pos-combo[i-1].pos : c.pos);
+    const minG = combo.length>1 ? Math.min(...gaps.slice(1)) : '—';
+    html += `<div class="opt-summary">
+      <div class="stat"><div class="n">${combo.length}</div><div class="k">enzymes chosen</div></div>
+      <div class="stat"><div class="n" style="color:${caiColor(meanCai)}">${meanCai.toFixed(2)}</div><div class="k">mean CAI</div></div>
+      <div class="stat"><div class="n">${minG}</div><div class="k">min gap (nt)</div></div>
+    </div>`;
+
+    // linear map of the gene with tick marks and shaded end-exclusion zones
+    const geneLen = STATE.protein.length*3;
+    const marginPct = (margin / STATE.protein.length) * 100;
+    html += `<div class="genemap"><div class="track"></div>`;
+    if (margin > 0) {
+      html += `<div class="exclzone" style="left:0;width:${marginPct}%" title="First ${margin} aa excluded"></div>`;
+      html += `<div class="exclzone" style="right:0;width:${marginPct}%" title="Last ${margin} aa excluded"></div>`;
+    }
+    for (const c of combo) {
+      const pct = (c.pos/geneLen)*100;
+      html += `<div class="tick" style="left:${pct}%"><span class="tlabel">${c.name}</span></div>`;
+    }
+    html += `<div class="mapends"><span>1</span><span>${geneLen} nt</span></div></div>`;
+    if (margin > 0) {
+      html += `<div class="margin-note">Sites restricted to aa ${margin+1}–${STATE.protein.length-margin} — first and last ${margin} residues reserved for flanking sites outside the gene.`;
+      if (excludedByMargin > 0) html += ` <span class="subtle">(${excludedByMargin} enzyme${excludedByMargin>1?'s':''} had positions only in the excluded zones and dropped out.)</span>`;
+      html += `</div>`;
+    }
+
+    // chosen table — each row clickable to veto that enzyme
+    html += `<table class="hits opt-table"><thead><tr>
+      <th>enzyme</th><th>site</th><th>aa</th><th>nt</th><th>overhang</th><th>CAI</th><th>gap to next</th><th>methylation</th><th></th></tr></thead><tbody>`;
+    combo.forEach((c,i) => {
+      const e = ENZYMES.find(x=>x.name===c.name);
+      const gapNext = i<combo.length-1 ? (combo[i+1].pos-c.pos)+' nt' : '—';
+      const pct = Math.round(c.cai*100);
+      html += `<tr class="chosen-row" data-enz="${c.name}" title="Click to exclude ${c.name} and re-solve">
+        <td class="name">${c.name}</td>
+        <td>${e.site}</td>
+        <td>${Math.floor(c.pos/3)+1}</td>
+        <td>${c.pos+1}</td>
+        <td class="ohang">${e.ohang}</td>
+        <td><span class="cai-bar"><span style="width:${pct}%;background:${caiColor(c.cai)}"></span></span>${c.cai.toFixed(2)}</td>
+        <td>${gapNext}</td>
+        <td>${methBadge(c.name) || '<span class="mbadge clear">—</span>'}</td>
+        <td class="veto">&times;</td>
+      </tr>`;
+    });
+    html += `</tbody></table>`;
+
+    // detailed methylation warnings — grouped so shared boilerplate isn't repeated
+    const chosenNamesM = combo.map(c=>c.name);
+    const cloningWarns = chosenNamesM.filter(n => METH[n] && METH[n].cloning);
+    const cpgWarns     = chosenNamesM.filter(n => METH[n] && METH[n].mammalian);
+    if (cloningWarns.length || cpgWarns.length) {
+      html += `<div class="meth-block">`;
+      // Dam/Dcm warnings are enzyme-specific (different contexts) — show each
+      for (const n of cloningWarns) {
+        html += `<div class="meth-warn cloning"><span class="mtag">Dam/Dcm</span><b>${n}:</b> ${METH[n].cloning}</div>`;
+      }
+      // CpG explanation is identical for every enzyme — show it once, list the enzymes
+      if (cpgWarns.length) {
+        html += `<div class="meth-warn mammal"><span class="mtag">CpG</span>${cpgWarns.join(', ')} ${cpgWarns.length>1?'are':'is'} CpG-sensitive — only matters if you digest DNA recovered from mammalian cells; E. coli-grown plasmid is unaffected.</div>`;
+      }
+      html += `</div>`;
+    }
+
+    // the excluded-but-placeable enzymes, and why
+    const chosenNames = new Set(combo.map(c=>c.name));
+    const chosenColl = new Set(combo.map(c=>collisionGroup(ENZYMES.find(x=>x.name===c.name))).filter(Boolean));
+    const dropped = placeable.filter(r=>!chosenNames.has(r.enz.name));
+    if (dropped.length) {
+      html += `<div class="dropped-note"><b>Available but not used</b> <span class="subtle">(click to force-exclude):</span> `;
+      html += dropped.map(r=>{
+        const cg = collisionGroup(r.enz);
+        let why = 'no gap-respecting position left';
+        if (cg && chosenColl.has(cg)) {
+          const clash = combo.find(c=>collisionGroup(ENZYMES.find(x=>x.name===c.name))===cg);
+          why = `${cg==='BLUNT'?'blunt-overhang':cg+'-overhang'} clash with ${clash.name}`;
+        }
+        return `<span class="drop clickable" data-enz="${r.enz.name}">${r.enz.name} <em>(${why})</em></span>`;
+      }).join(' ');
+      html += `</div>`;
+    }
+    if (capped) html += `<div class="hint" style="margin-top:8px;">Search space was large — this is a strong solution found within the time budget, not proven optimal. Every constraint is still satisfied.</div>`;
+  }
+
+  // user-vetoed enzymes — always shown so they can be brought back
+  if (DISABLED.size) {
+    const vetoed = [...DISABLED].filter(n => allPlaceable.some(r=>r.enz.name===n));
+    const vetoedUnplaceable = [...DISABLED].filter(n => !allPlaceable.some(r=>r.enz.name===n));
+    html += `<div class="vetoed-note"><b>Excluded by you</b> <span class="subtle">(click to allow again):</span> `;
+    html += [...DISABLED].map(n=>`<span class="drop clickable vetoed" data-enz="${n}">${n}</span>`).join(' ');
+    html += `</div>`;
+  }
+  html += `<div class="hint" style="margin-top:10px;">The optimizer respects overhang collisions and your spacing floor as hard rules, then maximises how many sites fit and how cheap their codons are. It suggests <em>which</em> sites to use and <em>where</em> — matching them to the domains you actually plan to swap is still your call. Positions are for the optimized CDS; hand back with your domain boundaries to finalise.</div>`;
+  html += `</div>`;
+
+  // insert/replace the optimizer panel at the top of results
+  const existing = document.getElementById('optPanelWrap');
+  const wrap = existing || document.createElement('div');
+  wrap.id = 'optPanelWrap';
+  wrap.innerHTML = html;
+  if (!existing) {
+    const R = document.getElementById('results');
+    R.insertBefore(wrap, R.firstChild);
+  }
+  // rewire controls (they were replaced)
+  document.getElementById('optPreset').onchange = renderOptimizer;
+  const g = document.getElementById('optGap'), cw = document.getElementById('optCaiW');
+  if (g) g.onchange = renderOptimizer;
+  if (cw) cw.onchange = renderOptimizer;
+  const mg = document.getElementById('optMargin');
+  if (mg) {
+    // re-render on change; keep focus and caret so the field stays usable while typing
+    mg.oninput = () => {
+      renderOptimizer();
+      const f = document.getElementById('optMargin');
+      if (f) { f.focus(); const v = f.value.length; f.setSelectionRange(v, v); }
+    };
+  }
+  // clickable enzymes: chosen rows, dropped chips, and vetoed chips all toggle
+  wrap.querySelectorAll('.chosen-row, .drop.clickable').forEach(el => {
+    el.onclick = () => toggleEnzyme(el.dataset.enz);
+  });
+}
+</script>
+</body>
+</html>
