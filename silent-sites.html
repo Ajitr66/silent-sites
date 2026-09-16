@@ -114,6 +114,22 @@
   .enz-toolbar { display: flex; gap: 12px; margin-bottom: 8px; }
   .enz-toolbar a { font-size: 11px; color: var(--signal); cursor: pointer; text-decoration: none; }
   .enz-toolbar a:hover { text-decoration: underline; }
+  .custom-add { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--panel-edge); }
+  #customForm { margin-top: 10px; }
+  .cf-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
+  .cf-row label { display: flex; flex-direction: column; gap: 3px; }
+  .cf-row label span { font-size: 10px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+  .cf-row label span em { text-transform: none; letter-spacing: 0; color: var(--ink-faint); font-style: normal; }
+  .cf-row input { background: var(--chassis); color: var(--ink); border: 1px solid var(--panel-edge); border-radius: 4px; font-family: var(--mono); font-size: 12px; padding: 7px 9px; }
+  .cf-row input:focus { outline: 2px solid var(--signal-dim); outline-offset: -1px; }
+  .cf-note { font-size: 10px; color: var(--ink-faint); line-height: 1.5; margin-bottom: 10px; }
+  .cf-actions { display: flex; align-items: center; gap: 12px; }
+  .cf-btn { background: var(--signal-dim); color: #d6ffec; border: none; border-radius: 4px; font-size: 12px; padding: 7px 14px; cursor: pointer; }
+  .cf-btn:hover { background: var(--signal); color: #06110b; }
+  .cf-error { font-size: 11px; color: var(--alert); }
+  .enz-item .custom-tag { font-size: 9px; color: var(--signal); margin-left: 3px; }
+  .enz-item .rm-custom { color: var(--ink-faint); cursor: pointer; margin-left: 4px; }
+  .enz-item .rm-custom:hover { color: var(--alert); }
 
   /* ---- Results ---- */
   .placeholder-panel {
@@ -293,6 +309,24 @@
           <a id="selSticky">sticky only</a><a id="selFixed">fixed only</a>
         </div>
         <div class="enz-list" id="enzList"></div>
+        <div class="custom-add">
+          <a id="customToggle" class="inline-link">+ Add custom enzyme</a>
+          <div id="customForm" style="display:none;">
+            <div class="cf-row">
+              <label><span>Name</span><input type="text" id="cfName" placeholder="e.g. XhoI" maxlength="16"></label>
+              <label><span>Recognition site</span><input type="text" id="cfSite" placeholder="e.g. CTCGAG" maxlength="20"></label>
+            </div>
+            <div class="cf-row">
+              <label><span>Top-strand cut <em>(bases from left)</em></span><input type="number" id="cfTop" placeholder="e.g. 1" min="0"></label>
+              <label><span>Bottom-strand cut <em>(bases from left)</em></span><input type="number" id="cfBot" placeholder="e.g. 5" min="0"></label>
+            </div>
+            <div class="cf-note">Cut positions let the tool compute the overhang and check collisions automatically. Example — EcoRI G^AATT_C cuts after base 1 (top) and base 5 (bottom): enter 1 and 5. For a blunt cutter enter the same number for both. Leave both blank if you don't know them — the enzyme will still be placed, but won't be collision-checked. Site accepts IUPAC codes (N, R, Y, etc.).</div>
+            <div class="cf-actions">
+              <button id="cfAdd" class="cf-btn">Add to palette</button>
+              <span id="cfError" class="cf-error"></span>
+            </div>
+          </div>
+        </div>
       </div>
 
       <button class="run" id="runBtn">Find placements</button>
@@ -379,25 +413,25 @@ const W = {
    note: buffer/methylation caveats
    ====================================================================== */
 const ENZYMES = [
-  // fixed sticky
-  {name:'AgeI',  site:'ACCGGT', tier:'sticky', ohang:"5' CCGG"},
-  {name:'BamHI', site:'GGATCC', tier:'sticky', ohang:"5' GATC"},
-  {name:'BsiWI', site:'CGTACG', tier:'sticky', ohang:"5' GTAC", coll:'GTAC'},
-  {name:'BsrGI', site:'TGTACA', tier:'sticky', ohang:"5' GTAC", coll:'GTAC'},
-  {name:'ClaI',  site:'ATCGAT', tier:'sticky', ohang:"5' CG", note:'Dam-blocked by ATCGATC / GATCGAT overlap'},
-  {name:'EcoRI', site:'GAATTC', tier:'sticky', ohang:"5' AATT"},
-  {name:'AscI',  site:'GGCGCGCC', tier:'sticky', ohang:"5' CGCG"},
-  {name:'AsiSI', site:'GCGATCGC', tier:'sticky', ohang:"3' AT", coll:'3AT'},
-  {name:'NotI',  site:'GCGGCCGC', tier:'sticky', ohang:"5' GGCC"},
-  {name:'SbfI',  site:'CCTGCAGG', tier:'sticky', ohang:"3' TGCA"},
-  {name:'FseI',  site:'GGCCGGCC', tier:'sticky', ohang:"3' CCGG"},
-  {name:'PacI',  site:'TTAATTAA', tier:'sticky', ohang:"3' AT", coll:'3AT'},
-  // blunt
-  {name:'AfeI',  site:'AGCGCT', tier:'blunt', ohang:'blunt'},
-  {name:'EcoRV', site:'GATATC', tier:'blunt', ohang:'blunt'},
-  {name:'HpaI',  site:'GTTAAC', tier:'blunt', ohang:'blunt'},
-  {name:'PmlI',  site:'CACGTG', tier:'blunt', ohang:'blunt'},
-  // degenerate reserve
+  // fixed sticky — top/bot are the cut-bond positions on the top-strand coordinate
+  {name:'AgeI',  site:'ACCGGT', tier:'sticky', top:1, bot:5},
+  {name:'BamHI', site:'GGATCC', tier:'sticky', top:1, bot:5},
+  {name:'BsiWI', site:'CGTACG', tier:'sticky', top:1, bot:5},
+  {name:'BsrGI', site:'TGTACA', tier:'sticky', top:1, bot:5},
+  {name:'ClaI',  site:'ATCGAT', tier:'sticky', top:2, bot:4, note:'Dam-blocked by ATCGATC / GATCGAT overlap'},
+  {name:'EcoRI', site:'GAATTC', tier:'sticky', top:1, bot:5},
+  {name:'AscI',  site:'GGCGCGCC', tier:'sticky', top:2, bot:6},
+  {name:'AsiSI', site:'GCGATCGC', tier:'sticky', top:5, bot:3},
+  {name:'NotI',  site:'GCGGCCGC', tier:'sticky', top:2, bot:6},
+  {name:'SbfI',  site:'CCTGCAGG', tier:'sticky', top:6, bot:2},
+  {name:'FseI',  site:'GGCCGGCC', tier:'sticky', top:6, bot:2},
+  {name:'PacI',  site:'TTAATTAA', tier:'sticky', top:5, bot:3},
+  // blunt (top==bot)
+  {name:'AfeI',  site:'AGCGCT', tier:'blunt', top:3, bot:3},
+  {name:'EcoRV', site:'GATATC', tier:'blunt', top:3, bot:3},
+  {name:'HpaI',  site:'GTTAAC', tier:'blunt', top:3, bot:3},
+  {name:'PmlI',  site:'CACGTG', tier:'blunt', top:3, bot:3},
+  // degenerate reserve — overhang depends on N bases you choose, so not auto-comparable
   {name:'BstEII',site:'GGTNACC', tier:'degenerate', ohang:"5' GTNAC", note:'use BstEII-HF for rCutSmart'},
   {name:'Bsu36I',site:'CCTNAGG', tier:'degenerate', ohang:"3' TNA (you set N)"},
   {name:'EcoNI', site:'CCTNNNNNAGG', tier:'degenerate', ohang:'variable'},
@@ -494,10 +528,33 @@ function findPlacements(protein, site, wtab, minCai) {
    normal genes and a strong solution (never an invalid one) if capped.
    Objective = (number of sites) + caiWeight x (mean CAI).
    ====================================================================== */
+/* Compute an enzyme's overhang from its cut positions.
+   Returns {type:'5'|'3'|'blunt', seq} or null if positions unknown. */
+function computeOverhang(enz) {
+  if (typeof enz.top !== 'number' || typeof enz.bot !== 'number') return null;
+  if (enz.top === enz.bot) return { type: 'blunt', seq: '' };
+  if (enz.top < enz.bot) return { type: '5', seq: enz.site.slice(enz.top, enz.bot) };
+  return { type: '3', seq: enz.site.slice(enz.bot, enz.top) };
+}
+// Display string for the overhang column.
+function overhangLabel(enz) {
+  const o = computeOverhang(enz);
+  if (!o) return enz.ohang || '—';           // degenerate/custom without positions
+  if (o.type === 'blunt') return 'blunt';
+  return `${o.type}\u2032 ${o.seq}`;
+}
+/* Collision key: two enzymes collide iff they can ligate to each other, i.e.
+   same polarity AND identical overhang sequence (blunt all inter-ligate).
+   Computed from real overhangs so polarity is respected (5' CCGG != 3' CCGG).
+   Falls back to a manual coll tag if positions are unknown (custom enzymes). */
 function collisionGroup(enz) {
-  if (enz.coll) return enz.coll;          // GTAC pair, 3AT pair
-  if (enz.tier === 'blunt') return 'BLUNT'; // all blunt cutters inter-ligate
-  return null;
+  const o = computeOverhang(enz);
+  if (o) {
+    if (o.type === 'blunt') return 'BLUNT';
+    return o.type + ':' + o.seq;             // e.g. "5:GTAC", "3:AT"
+  }
+  if (enz.coll) return enz.coll;             // custom enzyme with a manual tag
+  return null;                               // degenerate variable overhang — not checked
 }
 
 function optimizeCombo(candidates, minGap, caiWeight, nodeCap = 200000) {
@@ -552,17 +609,24 @@ function cleanProtein(raw) {
 
 const enzListEl = document.getElementById('enzList');
 function buildEnzList() {
-  const tiers = {sticky:'Sticky — cassette swapping', blunt:'Blunt — diagnostic', degenerate:'Degenerate reserve'};
+  const tiers = {sticky:'Sticky — cassette swapping', blunt:'Blunt — diagnostic', degenerate:'Degenerate reserve', custom:'Custom — added by you'};
   let html = '';
-  for (const t of ['sticky','blunt','degenerate']) {
+  for (const t of ['sticky','blunt','degenerate','custom']) {
+    const inTier = ENZYMES.filter(x=>x.tier===t);
+    if (t==='custom' && inTier.length===0) continue; // hide empty custom section
     html += `<div class="tier-head">${tiers[t]}</div>`;
-    for (const e of ENZYMES.filter(x=>x.tier===t)) {
-      const checked = (t==='sticky') ? 'checked' : '';
+    for (const e of inTier) {
+      const checked = (t==='sticky' || t==='custom') ? 'checked' : '';
+      const rm = (t==='custom') ? `<span class="rm-custom" data-rm="${e.name}" title="Remove">&times;</span>` : '';
       html += `<label class="enz-item"><input type="checkbox" data-enz="${e.name}" ${checked}>
-        <span>${e.name}</span><span class="site">${e.site}</span></label>`;
+        <span>${e.name}</span><span class="site">${e.site}</span>${rm}</label>`;
     }
   }
   enzListEl.innerHTML = html;
+  // wire remove buttons
+  enzListEl.querySelectorAll('.rm-custom').forEach(el => {
+    el.onclick = (ev) => { ev.preventDefault(); removeCustomEnzyme(el.dataset.rm); };
+  });
 }
 buildEnzList();
 
@@ -573,6 +637,61 @@ document.getElementById('selAll').onclick  = () => setChecks(()=>true);
 document.getElementById('selNone').onclick = () => setChecks(()=>false);
 document.getElementById('selSticky').onclick=() => setChecks(e=>e.tier==='sticky');
 document.getElementById('selFixed').onclick =() => setChecks(e=>e.tier!=='degenerate');
+
+/* ---- custom enzyme management ---- */
+const VALID_IUPAC = /^[ACGTRYSWKMBDHVN]+$/;
+function addCustomEnzyme(name, site, topStr, botStr) {
+  name = name.trim();
+  site = site.trim().toUpperCase();
+  const err = document.getElementById('cfError');
+  err.textContent = '';
+  if (!name) { err.textContent = 'Name required.'; return false; }
+  if (ENZYMES.some(e => e.name.toLowerCase() === name.toLowerCase())) {
+    err.textContent = `"${name}" already in the palette.`; return false;
+  }
+  if (!site) { err.textContent = 'Recognition site required.'; return false; }
+  if (!VALID_IUPAC.test(site)) { err.textContent = 'Site has invalid characters (use A/C/G/T and IUPAC codes).'; return false; }
+  if (site.length < 4) { err.textContent = 'Site looks too short (need ≥4 bases).'; return false; }
+  const enz = { name, site, tier: 'custom', custom: true };
+  // cut positions optional; if given, both required and within the site
+  const hasTop = topStr !== '' && topStr != null;
+  const hasBot = botStr !== '' && botStr != null;
+  if (hasTop || hasBot) {
+    if (!(hasTop && hasBot)) { err.textContent = 'Enter both cut positions, or leave both blank.'; return false; }
+    const top = parseInt(topStr), bot = parseInt(botStr);
+    if (isNaN(top) || isNaN(bot) || top < 0 || bot < 0 || top > site.length || bot > site.length) {
+      err.textContent = `Cut positions must be between 0 and ${site.length}.`; return false;
+    }
+    enz.top = top; enz.bot = bot;
+  } else {
+    enz.ohang = 'not specified';
+  }
+  ENZYMES.push(enz);
+  buildEnzList();
+  document.getElementById('cfName').value = '';
+  document.getElementById('cfSite').value = '';
+  document.getElementById('cfTop').value = '';
+  document.getElementById('cfBot').value = '';
+  if (STATE) document.getElementById('runBtn').click();
+  return true;
+}
+function removeCustomEnzyme(name) {
+  const i = ENZYMES.findIndex(e => e.name === name && e.custom);
+  if (i >= 0) { ENZYMES.splice(i, 1); buildEnzList(); if (STATE) document.getElementById('runBtn').click(); }
+}
+document.getElementById('customToggle').onclick = () => {
+  const f = document.getElementById('customForm');
+  const open = f.style.display !== 'none';
+  f.style.display = open ? 'none' : 'block';
+  document.getElementById('customToggle').textContent = open ? '+ Add custom enzyme' : '− Hide custom enzyme form';
+};
+document.getElementById('cfAdd').onclick = () =>
+  addCustomEnzyme(
+    document.getElementById('cfName').value,
+    document.getElementById('cfSite').value,
+    document.getElementById('cfTop').value,
+    document.getElementById('cfBot').value
+  );
 
 const caiColor = c => c>=0.8 ? 'var(--signal)' : c>=0.6 ? 'var(--warn-amber)' : 'var(--alert)';
 
@@ -635,7 +754,7 @@ function render(protein, results, host) {
       <div class="head" onclick="this.parentNode.classList.toggle('open')">
         <span class="name">${e.name}</span>
         <span class="site-tag">${e.site}</span>
-        <span class="ohang">${e.ohang}</span>
+        <span class="ohang">${overhangLabel(e)}</span>
         <span class="count-pill ${zero?'zero':''}">${zero?'impossible':r.hits.length+' site'+(r.hits.length>1?'s':'')}</span>
       </div>`;
     if (!zero) {
@@ -876,7 +995,7 @@ function renderOptimizer() {
         <td>${e.site}</td>
         <td>${Math.floor(c.pos/3)+1}</td>
         <td>${c.pos+1}</td>
-        <td class="ohang">${e.ohang}</td>
+        <td class="ohang">${overhangLabel(e)}</td>
         <td><span class="cai-bar"><span style="width:${pct}%;background:${caiColor(c.cai)}"></span></span>${c.cai.toFixed(2)}</td>
         <td>${gapNext}</td>
         <td>${methBadge(c.name) || '<span class="mbadge clear">—</span>'}</td>
